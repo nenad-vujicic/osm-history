@@ -100,8 +100,10 @@ HistoryCtrl = function(
   this.ngTimeout = $timeout;
   this.leafletBoundsHelpers = leafletBoundsHelpers;
   this.osmService = osmService;
+  this.numberOfDisplayedChanges = 50;
 
-  /** Full history list. */
+  /** Full and partial history lists. */
+  this.fullHistory = [];
   this.history = [];
   /** History of tag changes. */
   this.tagHistory = [];
@@ -128,45 +130,60 @@ HistoryCtrl = function(
   this.osmService
     .fetchOsm(path, this.type)
     .then(history => {
-      var prev = null;
-      this.history = history.map(obj => {
-        var diff = objDiff(prev, obj);
-        prev = obj;
-        return {
-          obj: obj,
-          diff: diff,
-        };
-      });
-      this.history.reverse(); // Start with the newest change.
-      var currentObj = this.history[0].obj;
-      this.deleted = currentObj._visible == 'false';
-      if (this.type == 'node' && !this.deleted) {
-        var latLng = latLngFromNode(currentObj);
-        this.extendedBounds = extendBounds(latLng);
-      }
-      this.tagHistory = filterTagHistory(this.history);
+      this.fullHistory = history;
 
-      this.populateChangesets();
-
-      this.populateWayHistory().then(() => {
-        this.populateWayMapData();
-        // Calculate bounds for JOSM link.
-        if (this.type == 'way' && this.history[0].nodes) {
-          var bounds = getBounds(this.history[0].nodes);
-          this.extendedBounds = L.latLngBounds(
-            extendBounds(bounds.getSouthWest()).getSouthWest(),
-            extendBounds(bounds.getNorthEast()).getNorthEast()
-          );
-        }
-      });
-
-      this.populateMapData();
+      this.updateHistory();
     })
     .catch(error => {
       this.error = error;
     });
-  // Fetch full view of a relation and calculate its bounds to display a link
-  // to JOSM.
+};
+
+/** Updates internal buffers with selected window of history */
+HistoryCtrl.prototype.updateHistory = function() {
+  var clippedHistory = this.fullHistory.slice(-this.numberOfDisplayedChanges);
+
+  var prev = null;
+  if (this.numberOfDisplayedChanges < this.fullHistory.length) {
+    prev = this.fullHistory[this.fullHistory.length - this.numberOfDisplayedChanges - 1];
+  }
+
+  this.history = clippedHistory.map(obj => {
+    var diff = objDiff(prev, obj);
+    prev = obj;
+    return {
+      obj: obj,
+      diff: diff,
+    };
+  });
+
+  this.history.reverse();
+
+  var currentObj = this.history[0].obj;
+  this.deleted = currentObj._visible == 'false';
+  if (this.type == 'node' && !this.deleted) {
+    var latLng = latLngFromNode(currentObj);
+    this.extendedBounds = extendBounds(latLng);
+  }
+
+  this.tagHistory = filterTagHistory(this.history);
+
+  this.populateChangesets();
+
+  this.populateWayHistory().then(() => {
+    this.populateWayMapData();
+    // Calculate bounds for JOSM link.
+    if (this.type == 'way' && this.history[0].nodes) {
+      var bounds = getBounds(this.history[0].nodes);
+      this.extendedBounds = L.latLngBounds(
+        extendBounds(bounds.getSouthWest()).getSouthWest(),
+        extendBounds(bounds.getNorthEast()).getNorthEast()
+      );
+    }
+  });
+
+  this.populateMapData();
+
   if (this.type == 'relation') {
     var path = `relation/${this.id}/full`;
     this.osmService.fetchOsm(path, 'node').then(memberNodes => {
@@ -179,11 +196,26 @@ HistoryCtrl = function(
       }
     });
   }
+}
+
+/** Returns the paginated history list to be displayed */
+HistoryCtrl.prototype.getPaginatedHistory = function() {
+  return this.hideTagless ? this.tagHistory : this.history;
 };
 
-/** Returns the history list to be displayed. */
-HistoryCtrl.prototype.getHistory = function() {
-  return this.hideTagless ? this.tagHistory : this.history;
+/** Loads more changes */
+HistoryCtrl.prototype.loadMore = function() {
+  this.numberOfDisplayedChanges += 50;
+  if (this.numberOfDisplayedChanges > this.fullHistory.length) {
+    this.numberOfDisplayedChanges = this.fullHistory.length;
+  }
+  this.updateHistory();
+};
+
+/** Loads all remaining changes */
+HistoryCtrl.prototype.loadAll = function() {
+  this.numberOfDisplayedChanges = this.fullHistory.length;
+  this.updateHistory();
 };
 
 /**
